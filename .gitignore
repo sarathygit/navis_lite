@@ -1,0 +1,33 @@
+# Environment
+.env
+
+# ---- Java / Maven ----
+gateway-service/target/
+gateway-service/.mvn/
+gateway-service/*.iml
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+
+# ---- Python ----
+decking-engine/__pycache__/
+decking-engine/**/__pycache__/
+decking-engine/.venv/
+decking-engine/*.egg-info/
+decking-engine/.pytest_cache/
+*.pyc
+
+# ---- Node / React ----
+dashboard/node_modules/
+dashboard/dist/
+dashboard/build/
+dashboard/.vite/
+
+# ---- IDE ----
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# ---- Docker ----
+docker-compose.override.yml

@@ -1,0 +1,75 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: navislite-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    ports:
+      - "${MYSQL_PORT}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - navislite-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  decking-engine:
+    build:
+      context: ./decking-engine
+    container_name: navislite-decking-engine
+    restart: unless-stopped
+    environment:
+      PYTHONUNBUFFERED: 1
+    ports:
+      - "${DECKING_ENGINE_PORT}:8000"
+    networks:
+      - navislite-net
+
+  gateway-service:
+    build:
+      context: ./gateway-service
+    container_name: navislite-gateway
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      decking-engine:
+        condition: service_started
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE}?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      SPRING_DATASOURCE_USERNAME: ${MYSQL_USER}
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD}
+      DECKING_ENGINE_URL: ${DECKING_ENGINE_URL}
+    ports:
+      - "${GATEWAY_PORT}:8080"
+    networks:
+      - navislite-net
+
+  dashboard:
+    build:
+      context: ./dashboard
+      args:
+        VITE_GATEWAY_API_URL: ${VITE_GATEWAY_API_URL}
+        VITE_DECKING_ENGINE_API_URL: ${VITE_DECKING_ENGINE_API_URL}
+    container_name: navislite-dashboard
+    restart: unless-stopped
+    depends_on:
+      - gateway-service
+    ports:
+      - "${DASHBOARD_PORT}:80"
+    networks:
+      - navislite-net
+
+networks:
+  navislite-net:
+    driver: bridge
+
+volumes:
+  mysql_data:

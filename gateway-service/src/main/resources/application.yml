@@ -1,0 +1,29 @@
+spring:
+  application:
+    name: gateway-service
+
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/navislite_db?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
+    username: ${SPRING_DATASOURCE_USERNAME:navislite_app}
+    password: ${SPRING_DATASOURCE_PASSWORD:navislite_app_pw}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: true
+
+server:
+  port: 8080
+
+navislite:
+  decking-engine:
+    base-url: ${DECKING_ENGINE_URL:http://localhost:8000}
+    predict-path: /api/predict-decking
+    release-path: /api/release-slot
+    vessel-load-path: /api/vessel/load
+    timeout-ms: 5000
