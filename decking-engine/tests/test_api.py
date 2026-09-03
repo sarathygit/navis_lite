@@ -159,6 +159,32 @@ def test_vessel_route_returns_full_grid():
         assert len(slots) == 96
 
 
+def test_model_metrics_route_exposes_evaluation_results():
+    with TestClient(app) as client:
+        response = client.get("/api/model/metrics")
+        assert response.status_code == 200
+        body = response.json()
+
+        assert body["dataSource"] in ("synthetic", "history")
+        assert body["maeDays"] > 0
+        assert body["baselineMaeDays"] > 0
+        assert body["beatsBaseline"] is True
+        assert set(body["featureImportances"]) == {"weight_kg", "reefer", "tier", "is_heavy"}
+        assert body["selectedModel"] in ("linear_regression", "random_forest")
+        assert set(body["modelSelection"]) == {"linear_regression", "random_forest"}
+
+
+def test_model_retrain_route_returns_fresh_metrics():
+    with TestClient(app) as client:
+        response = client.post("/api/model/retrain")
+        assert response.status_code == 200
+        body = response.json()
+        # no gateway reachable from the test process, so it must fall back cleanly
+        assert body["dataSource"] == "synthetic"
+        assert body["provenance"]["source"] == "synthetic"
+        assert "fallback_reason" in body["provenance"]
+
+
 def test_vessel_stability_route_reflects_loaded_weight():
     with TestClient(app) as client:
         client.post(

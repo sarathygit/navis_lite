@@ -8,6 +8,7 @@ from app.models.schemas import (
     EfficiencyIndexResponse,
     LoadVesselRequest,
     LoadVesselResponse,
+    ModelMetricsResponse,
     ReleaseSlotRequest,
     ReleaseSlotResponse,
     TelemetryReading,
@@ -19,6 +20,7 @@ from app.models.schemas import (
     YardStateResponse,
 )
 from app.services.decking_engine import find_best_slot, live_slot_risk, release_container
+from app.services.ml_model import dwell_time_model
 from app.services.telemetry import telemetry_simulator
 from app.services.vessel_engine import load_container
 from app.services.vessel_state import vessel_state
@@ -119,6 +121,22 @@ def get_vessel_stability() -> VesselStabilityResponse:
         for bay, row, tier, occ in vessel_state.upper_deck_heavy_violations()
     ]
     return VesselStabilityResponse(total_deck_weight=vessel_state.total_weight(), violations=violations)
+
+
+@router.get("/model/metrics", response_model=ModelMetricsResponse, response_model_by_alias=True)
+def get_model_metrics() -> ModelMetricsResponse:
+    return ModelMetricsResponse(**dwell_time_model.get_metrics())
+
+
+@router.post("/model/retrain", response_model=ModelMetricsResponse, response_model_by_alias=True)
+def retrain_model() -> ModelMetricsResponse:
+    """Rebuilds the dwell model from current gate history.
+
+    Exposed because a freshly started terminal has no history to learn from —
+    once real check-in/check-out cycles have accumulated, this promotes the
+    model off the synthetic corpus without a restart.
+    """
+    return ModelMetricsResponse(**dwell_time_model.retrain_from_history())
 
 
 @router.get("/health")

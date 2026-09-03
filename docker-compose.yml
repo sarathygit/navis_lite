@@ -27,6 +27,10 @@ services:
     restart: unless-stopped
     environment:
       PYTHONUNBUFFERED: 1
+      # Read-only: history is pulled for model training. The engine never
+      # writes through the gateway, so there is no circular dependency —
+      # if the gateway is not up yet, training falls back to synthetic.
+      GATEWAY_SERVICE_URL: ${GATEWAY_SERVICE_URL:-http://gateway-service:8080}
     ports:
       - "${DECKING_ENGINE_PORT}:8000"
     networks:

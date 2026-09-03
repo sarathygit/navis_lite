@@ -54,3 +54,48 @@ navis-lite/
 - **Telemetry alerts**: the decking engine runs a background simulation loop over
   active reefer slots; a power loss or temperature threshold breach raises a
   high-priority alert consumed by the dashboard's Alert Ticker.
+
+## The dwell-time model
+
+Slot ranking depends on predicting how long a container will occupy a slot. That
+prediction is learned, selected and measured rather than assumed.
+
+**Training data comes from real operating history.** The engine pulls raw gate
+transactions from `GET /api/gate/training-data` and does its own wrangling in
+`decking-engine/app/services/training_data.py`:
+
+- containers that never received a slot (rejected or held at the gate) are dropped —
+  there is no placement to learn from;
+- **right-censored** observations — containers still sitting in the yard, whose true
+  dwell is unknown and only bounded below — are excluded from the target, because
+  treating a lower bound as a completed value biases every prediction downward.
+  Excluding them is not free either (it skews the sample toward fast-moving cargo),
+  so the censoring rate is measured and reported in the model metrics instead of
+  being hidden;
+- non-positive dwell from clock skew and implausibly long dwell are dropped as data
+  faults;
+- `is_heavy` is engineered from the 20,000 kg structural threshold.
+
+Below `MIN_TRAINING_ROWS` usable rows the model falls back to a synthetic corpus, so
+a terminal on day one still works. `POST /api/model/retrain` promotes the model onto
+real history once enough moves have accumulated, without a restart.
+
+**The model is selected by measurement, not preference.** Every training run
+cross-validates a `LinearRegression` and a `RandomForestRegressor` and deploys
+whichever has the lower MAE, then measures the winner on a held-out test set and
+against a naive mean-predicting baseline.
+
+That measurement produced a finding worth recording: **on the synthetic corpus the
+RandomForest does not earn its complexity.** Linear regression scores a lower MAE
+(0.810 vs 0.830 days) at a fraction of the cost, because the synthetic generator
+builds dwell from a linear formula. The engineered `is_heavy` feature also scored
+0.0 importance under the tree — it is collinear with a threshold the tree can split
+on directly. Both models beat the naive baseline by roughly 28%, so the prediction
+is worth making; it simply does not need an ensemble to make it. If real terminal
+history turns out to be non-linear, the same selection step will promote the forest
+on merit.
+
+`GET /api/model/metrics` exposes the whole picture live — selected model, the
+candidate comparison, MAE / RMSE / R², cross-validated MAE and spread, baseline
+comparison, feature attribution, and the data provenance including how many rows
+were dropped and why.

@@ -1,5 +1,7 @@
 """Central configuration and business-rule constants for the Expert Decking Engine."""
 
+import os
+
 # Weight-tier policy: heavy cargo is structurally restricted to the lowest tiers.
 HEAVY_WEIGHT_THRESHOLD_KG = 20_000.0
 HEAVY_ALLOWED_TIERS = (1, 2)
@@ -39,3 +41,28 @@ VESSEL_BAYS = 6
 VESSEL_ROWS = 4
 VESSEL_TIERS = 4
 VESSEL_UPPER_DECK_MIN_TIER = 3
+
+# Dwell-time model: training data acquisition and evaluation.
+# The gateway owns transaction history, so the engine fetches it over HTTP
+# rather than opening its own database connection.
+GATEWAY_URL = os.getenv("GATEWAY_SERVICE_URL", "http://gateway-service:8080")
+GATEWAY_TIMEOUT_SECONDS = 5.0
+
+# Below this many usable historical rows, the model falls back to the synthetic
+# corpus — a terminal on day one has nothing to learn from yet.
+MIN_TRAINING_ROWS = 30
+
+# A dwell longer than this is treated as a data fault (clock skew, bad import)
+# rather than a real observation.
+MAX_PLAUSIBLE_DWELL_DAYS = 365.0
+
+# Evaluation settings.
+TEST_SET_FRACTION = 0.2
+CROSS_VALIDATION_FOLDS = 5
+MODEL_RANDOM_STATE = 7
+
+# If observed dwell times vary by less than this, there is effectively nothing to
+# predict and the error metrics collapse toward zero. Reported as a warning so a
+# meaningless "beats the baseline" result is not mistaken for a good model —
+# typically seen on a demo terminal where containers are checked straight back out.
+DEGENERATE_TARGET_STD_DAYS = 0.01

@@ -264,6 +264,40 @@ class GateControllerTest {
     }
 
     @Test
+    void trainingDataExposesRawRecordsIncludingUnfinishedAndUnplacedOnes() throws Exception {
+        GateTransaction completed = new GateTransaction();
+        completed.setContainerId("AAAA1111111");
+        completed.setWeightKg(26000.0);
+        completed.setReefer(false);
+        completed.setStatus(GateStatus.DEPARTED);
+        completed.setAssignedTier(1);
+        completed.setDepartureTime(java.time.LocalDateTime.now());
+
+        GateTransaction stillInYard = new GateTransaction();
+        stillInYard.setContainerId("BBBB2222222");
+        stillInYard.setWeightKg(5000.0);
+        stillInYard.setReefer(false);
+        stillInYard.setStatus(GateStatus.DECKED);
+        stillInYard.setAssignedTier(3);
+
+        GateTransaction neverPlaced = new GateTransaction();
+        neverPlaced.setContainerId("CCCC3333333");
+        neverPlaced.setWeightKg(4000.0);
+        neverPlaced.setReefer(false);
+        neverPlaced.setStatus(GateStatus.REJECTED);
+
+        when(gateService.listTransactions()).thenReturn(List.of(completed, stillInYard, neverPlaced));
+
+        mockMvc.perform(get("/api/gate/training-data"))
+                .andExpect(status().isOk())
+                // all three are handed over unfiltered - cleaning is the engine's job
+                .andExpect(jsonPath("$.length()").value(3))
+                .andExpect(jsonPath("$[0].departureTime").isNotEmpty())
+                .andExpect(jsonPath("$[1].departureTime").doesNotExist())
+                .andExpect(jsonPath("$[2].assignedTier").doesNotExist());
+    }
+
+    @Test
     void loadToVesselReturns409WhenVesselEngineRejectsThePlacement() throws Exception {
         LoadToVesselRequest request = new LoadToVesselRequest();
         request.setContainerId("ABCD1234567");

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -99,6 +99,36 @@ class Alert(BaseModel):
     timestamp: datetime
 
     model_config = {"populate_by_name": True, "by_alias": True}
+
+
+class ModelMetricsResponse(BaseModel):
+    """Evaluation results for the currently deployed dwell-time model."""
+
+    data_source: str = Field(..., alias="dataSource")
+    trained_at: str = Field(..., alias="trainedAt")
+    selected_model: str = Field(..., alias="selectedModel")
+    model_selection: dict[str, float] = Field(..., alias="modelSelection")
+    attribution_kind: str = Field(..., alias="attributionKind")
+    training_rows: int = Field(..., alias="trainingRows")
+    train_rows: int = Field(..., alias="trainRows")
+    test_rows: int = Field(..., alias="testRows")
+    mae_days: float = Field(..., alias="maeDays")
+    rmse_days: float = Field(..., alias="rmseDays")
+    r2: float
+    baseline_mae_days: float = Field(..., alias="baselineMaeDays")
+    beats_baseline: bool = Field(..., alias="beatsBaseline")
+    improvement_over_baseline_pct: float = Field(..., alias="improvementOverBaselinePct")
+    target_std_days: float = Field(..., alias="targetStdDays")
+    target_range_days: float = Field(..., alias="targetRangeDays")
+    degenerate_target: bool = Field(..., alias="degenerateTarget")
+    metrics_meaningful: bool = Field(..., alias="metricsMeaningful")
+    cv_folds: Optional[int] = Field(None, alias="cvFolds")
+    cv_mae_days: Optional[float] = Field(None, alias="cvMaeDays")
+    cv_mae_std: Optional[float] = Field(None, alias="cvMaeStd")
+    feature_importances: dict[str, float] = Field(..., alias="featureImportances")
+    provenance: dict[str, Any]
+
+    model_config = {"populate_by_name": True, "by_alias": True, "protected_namespaces": ()}
 
 
 class LoadVesselRequest(BaseModel):

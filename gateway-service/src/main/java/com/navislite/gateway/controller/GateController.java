@@ -5,6 +5,7 @@ import com.navislite.gateway.dto.CheckInResponse;
 import com.navislite.gateway.dto.CheckOutRequest;
 import com.navislite.gateway.dto.HoldRequest;
 import com.navislite.gateway.dto.LoadToVesselRequest;
+import com.navislite.gateway.dto.TrainingRecordResponse;
 import com.navislite.gateway.entity.GateTransaction;
 import com.navislite.gateway.service.GateService;
 import jakarta.validation.Valid;
@@ -60,6 +61,18 @@ public class GateController {
     public ResponseEntity<List<CheckInResponse>> listTransactions() {
         List<CheckInResponse> body = gateService.listTransactions().stream()
                 .map(CheckInResponse::fromEntity)
+                .toList();
+        return ResponseEntity.ok(body);
+    }
+
+    /**
+     * Raw transaction history for model training. Consumed by the decking engine,
+     * which does its own cleaning, censoring and feature engineering.
+     */
+    @GetMapping("/training-data")
+    public ResponseEntity<List<TrainingRecordResponse>> trainingData() {
+        List<TrainingRecordResponse> body = gateService.listTransactions().stream()
+                .map(TrainingRecordResponse::fromEntity)
                 .toList();
         return ResponseEntity.ok(body);
     }
