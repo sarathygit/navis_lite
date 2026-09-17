@@ -13,6 +13,33 @@ class DeckingRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class RestoreSlotRequest(BaseModel):
+    """Puts a container back in the exact slot it was just lifted from.
+
+    This is the compensating half of a vessel load: the gateway releases the
+    yard slot before asking the vessel to accept the container, so a rejection
+    would otherwise leave the container in neither place.
+    """
+
+    container_id: str = Field(..., alias="containerId")
+    weight_kg: float = Field(..., alias="weightKg")
+    reefer: bool = False
+    dwell_time_estimate: float = Field(0.0, alias="dwellTimeEstimate")
+    block: str
+    row: int
+    bay: int
+    tier: int
+
+    model_config = {"populate_by_name": True, "by_alias": True}
+
+
+class RestoreSlotResponse(BaseModel):
+    restored: bool
+    reason: Optional[str] = None
+
+    model_config = {"populate_by_name": True, "by_alias": True}
+
+
 class RelocationSuggestion(BaseModel):
     """A single housekeeping move that would make a rejected container placeable.
 

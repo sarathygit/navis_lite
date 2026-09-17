@@ -3,6 +3,8 @@ package com.navislite.gateway.service;
 import com.navislite.gateway.dto.CheckInRequest;
 import com.navislite.gateway.dto.DeckingResponse;
 import com.navislite.gateway.dto.ReleaseSlotResponse;
+import com.navislite.gateway.dto.RestoreSlotRequest;
+import com.navislite.gateway.dto.RestoreSlotResponse;
 import com.navislite.gateway.dto.VesselLoadResponse;
 import com.navislite.gateway.entity.GateStatus;
 import com.navislite.gateway.entity.GateTransaction;
@@ -14,6 +16,7 @@ import com.navislite.gateway.exception.VesselLoadRejectedException;
 import com.navislite.gateway.repository.GateTransactionRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
@@ -286,8 +289,85 @@ class GateServiceTest {
         rejected.setLoaded(false);
         rejected.setReason("Vessel slot already occupied");
         when(vesselClient.loadContainer(any())).thenReturn(rejected);
+        when(deckingClient.restoreSlot(any())).thenReturn(restoreSucceeded());
 
         assertThrows(VesselLoadRejectedException.class, () -> gateService.loadToVessel("ABCD1234567", 1, 1, 1));
+    }
+
+    @Test
+    void aRefusedVesselLoadPutsTheContainerBackInTheYardSlotItCameFrom() {
+        // Regression: the yard slot is released before the vessel is asked to take the
+        // container. A refusal rolled back the ledger row but not the decking engine's
+        // grid, so the container vanished from the yard map while the ledger still said
+        // DECKED. Every later action then reported "not found in the yard".
+        GateTransaction tx = deckedTransaction();
+        when(repository.findFirstByContainerIdAndStatusInOrderByCheckInTimeDesc(eq("ABCD1234567"), any()))
+                .thenReturn(Optional.of(tx));
+
+        ReleaseSlotResponse released = new ReleaseSlotResponse();
+        released.setReleased(true);
+        when(deckingClient.releaseSlot(any())).thenReturn(released);
+
+        VesselLoadResponse rejected = new VesselLoadResponse();
+        rejected.setLoaded(false);
+        rejected.setReason("Vessel slot bay=1 row=1 tier=1 is already occupied");
+        when(vesselClient.loadContainer(any())).thenReturn(rejected);
+        when(deckingClient.restoreSlot(any())).thenReturn(restoreSucceeded());
+
+        assertThrows(VesselLoadRejectedException.class, () -> gateService.loadToVessel("ABCD1234567", 1, 1, 1));
+
+        ArgumentCaptor<RestoreSlotRequest> captor = ArgumentCaptor.forClass(RestoreSlotRequest.class);
+        verify(deckingClient).restoreSlot(captor.capture());
+        RestoreSlotRequest restore = captor.getValue();
+
+        assertEquals("ABCD1234567", restore.getContainerId());
+        assertEquals("A", restore.getBlock());
+        assertEquals(2, restore.getRow());
+        assertEquals(4, restore.getBay());
+        assertEquals(3, restore.getTier(), "must go back to the exact slot, not a new one");
+        assertEquals(15000.0, restore.getWeightKg());
+    }
+
+    @Test
+    void aSuccessfulVesselLoadNeverRestoresTheYardSlot() {
+        GateTransaction tx = deckedTransaction();
+        when(repository.findFirstByContainerIdAndStatusInOrderByCheckInTimeDesc(eq("ABCD1234567"), any()))
+                .thenReturn(Optional.of(tx));
+
+        ReleaseSlotResponse released = new ReleaseSlotResponse();
+        released.setReleased(true);
+        when(deckingClient.releaseSlot(any())).thenReturn(released);
+
+        VesselLoadResponse loaded = new VesselLoadResponse();
+        loaded.setLoaded(true);
+        when(vesselClient.loadContainer(any())).thenReturn(loaded);
+
+        gateService.loadToVessel("ABCD1234567", 1, 1, 1);
+
+        verify(deckingClient, never()).restoreSlot(any());
+    }
+
+    @Test
+    void aVesselClientFailureAlsoPutsTheContainerBackInTheYard() {
+        GateTransaction tx = deckedTransaction();
+        when(repository.findFirstByContainerIdAndStatusInOrderByCheckInTimeDesc(eq("ABCD1234567"), any()))
+                .thenReturn(Optional.of(tx));
+
+        ReleaseSlotResponse released = new ReleaseSlotResponse();
+        released.setReleased(true);
+        when(deckingClient.releaseSlot(any())).thenReturn(released);
+        when(vesselClient.loadContainer(any())).thenThrow(new IllegalStateException("vessel engine down"));
+        when(deckingClient.restoreSlot(any())).thenReturn(restoreSucceeded());
+
+        assertThrows(IllegalStateException.class, () -> gateService.loadToVessel("ABCD1234567", 1, 1, 1));
+
+        verify(deckingClient).restoreSlot(any());
+    }
+
+    private RestoreSlotResponse restoreSucceeded() {
+        RestoreSlotResponse response = new RestoreSlotResponse();
+        response.setRestored(true);
+        return response;
     }
 
     private GateTransaction deckedTransaction() {
@@ -297,7 +377,10 @@ class GateServiceTest {
         tx.setReefer(false);
         tx.setStatus(GateStatus.DECKED);
         tx.setAssignedBlock("A");
+        tx.setAssignedRow(2);
+        tx.setAssignedBay(4);
         tx.setAssignedTier(3);
+        tx.setDwellTimeEstimate(4.0);
         return tx;
     }
 

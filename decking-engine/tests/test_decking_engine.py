@@ -315,3 +315,41 @@ def test_no_suggestion_when_the_yard_is_genuinely_full():
 
     assert response.placed is False
     assert response.suggestion is None, "no move helps when every slot is taken"
+
+
+# ---------- restore (compensating a refused vessel load) ----------
+
+def test_restore_puts_a_container_back_in_its_exact_slot():
+    """Regression: the gateway frees the yard slot before asking the vessel to
+    take the container. When the vessel refused, the container vanished from the
+    yard map while the ledger still called it DECKED."""
+    from app.models.schemas import RestoreSlotRequest
+    from app.services.decking_engine import restore_container
+
+    yard = YardState()
+    yard.place("A", 1, 1, 1, occ("BACK0000001", 9_000))
+    release_container("BACK0000001", yard)
+    assert yard.occupied_count() == 0
+
+    result = restore_container(RestoreSlotRequest(
+        containerId="BACK0000001", weightKg=9_000, reefer=False,
+        dwellTimeEstimate=3.0, block="A", row=1, bay=1, tier=1), yard)
+
+    assert result.restored is True
+    assert yard.find_slot_by_container_id("BACK0000001") == ("A", 1, 1, 1)
+
+
+def test_restore_refuses_to_overwrite_a_slot_someone_else_took():
+    from app.models.schemas import RestoreSlotRequest
+    from app.services.decking_engine import restore_container
+
+    yard = YardState()
+    yard.place("A", 1, 1, 1, occ("OTHER000001", 9_000))
+
+    result = restore_container(RestoreSlotRequest(
+        containerId="BACK0000001", weightKg=9_000, reefer=False,
+        dwellTimeEstimate=3.0, block="A", row=1, bay=1, tier=1), yard)
+
+    assert result.restored is False
+    assert "OTHER000001" in result.reason
+    assert yard.find_slot_by_container_id("OTHER000001") == ("A", 1, 1, 1)

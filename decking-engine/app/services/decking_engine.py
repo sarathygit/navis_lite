@@ -31,6 +31,8 @@ from app.models.schemas import (
     DeckingResponse,
     RelocationSuggestion,
     ReleaseSlotResponse,
+    RestoreSlotRequest,
+    RestoreSlotResponse,
 )
 from app.services.ml_model import dwell_time_model
 from app.services.yard_state import SlotOccupant, YardState
@@ -294,3 +296,43 @@ def release_container(container_id: str, yard: YardState) -> ReleaseSlotResponse
             tier=tier,
             reason=f"Released {container_id} from {block}-{row:02d}-{bay:02d} tier {tier}",
         )
+
+
+def restore_container(request: RestoreSlotRequest, yard: YardState) -> RestoreSlotResponse:
+    """Puts a container back in the exact slot it was lifted from.
+
+    The compensating half of a vessel load. The gateway frees the yard slot
+    before asking the vessel to take the container, so when the vessel refuses
+    the container would otherwise exist in neither grid while the ledger still
+    called it DECKED. This undoes the release.
+
+    Deliberately not a re-decking: it restores the original coordinate rather
+    than searching for a new one, so a failed load leaves the yard exactly as it
+    was. The slot was vacated moments ago, so it is normally still free; if
+    something else has taken it the caller is told rather than silently
+    overwriting a real container.
+    """
+    with yard.lock():
+        if not yard.is_open(request.block, request.row, request.bay, request.tier):
+            occupant = yard.occupant_at(request.block, request.row, request.bay, request.tier)
+            taken_by = occupant.container_id if occupant else "another container"
+            return RestoreSlotResponse(
+                restored=False,
+                reason=(
+                    f"Cannot restore {request.container_id} to {request.block}-"
+                    f"{request.row:02d}-{request.bay:02d} tier {request.tier}: "
+                    f"now held by {taken_by}"
+                ),
+            )
+
+        yard.place(
+            request.block, request.row, request.bay, request.tier,
+            SlotOccupant(
+                container_id=request.container_id,
+                weight_kg=request.weight_kg,
+                reefer=request.reefer,
+                dwell_time_estimate=request.dwell_time_estimate,
+                placed_at=datetime.now(timezone.utc),
+            ),
+        )
+        return RestoreSlotResponse(restored=True)

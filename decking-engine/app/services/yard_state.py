@@ -2,15 +2,13 @@
 
 Each addressable coordinate is (block, row, bay, tier). Stacks fill bottom-up:
 a tier may only be occupied once every tier below it in the same (block, row, bay)
-stack is occupied. This is what gives the weight-tier policy physical meaning —
-heavy containers form the structural base a lighter container can be stacked on.
+stack is occupied, so there are no floating slots.
 
 The yard starts empty. Every occupied slot corresponds to a real container that
-came through /api/predict-decking, so this state always agrees with the
+came through /api/predict-decking, so this state should always agree with the
 gateway-service ledger (the ledger is the durable record; this is its live
-mirror). A light container checked into a fresh yard will be rejected until
-enough heavy containers have arrived to form a structural base — that's the
-weight-tier rule working as intended, not a bug.
+mirror). Because this mirror is in memory only, it is rebuilt from the ledger at
+start-up and on demand via POST /api/state/resync.
 """
 
 import threading
@@ -86,6 +84,10 @@ class YardState:
     def release(self, block: str, row: int, bay: int, tier: int) -> Optional[SlotOccupant]:
         with self._lock:
             return self._occupancy.pop((block, row, bay, tier), None)
+
+    def occupant_at(self, block: str, row: int, bay: int, tier: int) -> Optional[SlotOccupant]:
+        with self._lock:
+            return self._occupancy.get((block, row, bay, tier))
 
     def is_open(self, block: str, row: int, bay: int, tier: int) -> bool:
         with self._lock:

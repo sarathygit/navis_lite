@@ -13,6 +13,8 @@ from app.models.schemas import (
     ModelMetricsResponse,
     ReleaseSlotRequest,
     ReleaseSlotResponse,
+    RestoreSlotRequest,
+    RestoreSlotResponse,
     TelemetryReading,
     VesselSlot,
     VesselStabilityResponse,
@@ -21,7 +23,12 @@ from app.models.schemas import (
     YardSlot,
     YardStateResponse,
 )
-from app.services.decking_engine import find_best_slot, live_slot_risk, release_container
+from app.services.decking_engine import (
+    find_best_slot,
+    live_slot_risk,
+    release_container,
+    restore_container,
+)
 from app.services.ml_model import dwell_time_model
 from app.services.state_sync import resync
 from app.services.telemetry import telemetry_simulator
@@ -40,6 +47,12 @@ def predict_decking(request: DeckingRequest) -> DeckingResponse:
 @router.post("/release-slot", response_model=ReleaseSlotResponse, response_model_by_alias=True)
 def release_slot(request: ReleaseSlotRequest) -> ReleaseSlotResponse:
     return release_container(request.container_id, yard_state)
+
+
+@router.post("/restore-slot", response_model=RestoreSlotResponse, response_model_by_alias=True)
+def restore_slot(request: RestoreSlotRequest) -> RestoreSlotResponse:
+    """Undoes a release when the vessel refuses the container (see restore_container)."""
+    return restore_container(request, yard_state)
 
 
 @router.get("/yard", response_model=YardStateResponse, response_model_by_alias=True)

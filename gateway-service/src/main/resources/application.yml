@@ -25,5 +25,6 @@ navislite:
     base-url: ${DECKING_ENGINE_URL:http://localhost:8000}
     predict-path: /api/predict-decking
     release-path: /api/release-slot
+    restore-path: /api/restore-slot
     vessel-load-path: /api/vessel/load
     timeout-ms: 5000
