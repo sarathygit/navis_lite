@@ -9,6 +9,7 @@ import com.navislite.gateway.entity.GateTransaction;
 import com.navislite.gateway.entity.HoldType;
 import com.navislite.gateway.entity.TaskType;
 import com.navislite.gateway.exception.ActiveHoldException;
+import com.navislite.gateway.exception.DuplicateContainerException;
 import com.navislite.gateway.exception.VesselLoadRejectedException;
 import com.navislite.gateway.repository.GateTransactionRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,6 +20,8 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 class GateServiceTest {
@@ -44,7 +47,8 @@ class GateServiceTest {
 
     @Test
     void checkInWithExpiredVesselCutoffSetsHeldAndNeverCallsDeckingEngine() {
-        when(repository.findByContainerId("ABCD1234567")).thenReturn(Optional.empty());
+        when(repository.findFirstByContainerIdAndStatusInOrderByCheckInTimeDesc(eq("ABCD1234567"), any()))
+                .thenReturn(Optional.empty());
 
         CheckInRequest request = new CheckInRequest();
         request.setContainerId("ABCD1234567");
@@ -52,7 +56,7 @@ class GateServiceTest {
         request.setReefer(false);
         request.setVesselCutoffTime(LocalDateTime.now().minusHours(2));
 
-        GateTransaction result = gateService.checkIn(request);
+        GateTransaction result = gateService.checkIn(request).transaction();
 
         assertEquals(GateStatus.HELD, result.getStatus());
         assertEquals(HoldType.VESSEL_CUTOFF_EXPIRED, result.getHoldType());
@@ -61,7 +65,8 @@ class GateServiceTest {
 
     @Test
     void checkInWithFutureVesselCutoffProceedsNormally() {
-        when(repository.findByContainerId("ABCD1234567")).thenReturn(Optional.empty());
+        when(repository.findFirstByContainerIdAndStatusInOrderByCheckInTimeDesc(eq("ABCD1234567"), any()))
+                .thenReturn(Optional.empty());
         when(deckingClient.requestSlot(any())).thenReturn(deckedResponse());
 
         CheckInRequest request = new CheckInRequest();
@@ -70,7 +75,7 @@ class GateServiceTest {
         request.setReefer(false);
         request.setVesselCutoffTime(LocalDateTime.now().plusDays(3));
 
-        GateTransaction result = gateService.checkIn(request);
+        GateTransaction result = gateService.checkIn(request).transaction();
 
         assertEquals(GateStatus.DECKED, result.getStatus());
         assertNull(result.getHoldType());
@@ -80,7 +85,8 @@ class GateServiceTest {
 
     @Test
     void checkInRejectedByDeckingEngineNeverDispatchesAWorkInstruction() {
-        when(repository.findByContainerId("ABCD1234567")).thenReturn(Optional.empty());
+        when(repository.findFirstByContainerIdAndStatusInOrderByCheckInTimeDesc(eq("ABCD1234567"), any()))
+                .thenReturn(Optional.empty());
         DeckingResponse rejected = new DeckingResponse();
         rejected.setPlaced(false);
         rejected.setReason("Yard full");
@@ -91,10 +97,80 @@ class GateServiceTest {
         request.setWeightKg(15000.0);
         request.setReefer(false);
 
-        GateTransaction result = gateService.checkIn(request);
+        GateTransaction result = gateService.checkIn(request).transaction();
 
         assertEquals(GateStatus.REJECTED, result.getStatus());
         verify(equipmentDispatchService, never()).createWorkInstruction(any(), any());
+    }
+
+    @Test
+    void aRejectedContainerCanBePresentedAtTheGateAgain() {
+        // A container turned away for lack of a structural base never entered the
+        // yard. When space frees up the truck comes back, and the gate must accept it.
+        when(repository.findFirstByContainerIdAndStatusInOrderByCheckInTimeDesc(eq("ABCD1234567"), any()))
+                .thenReturn(Optional.empty());
+        when(deckingClient.requestSlot(any())).thenReturn(deckedResponse());
+
+        CheckInRequest retry = new CheckInRequest();
+        retry.setContainerId("ABCD1234567");
+        retry.setWeightKg(6200.0);
+        retry.setReefer(false);
+
+        GateTransaction result = gateService.checkIn(retry).transaction();
+
+        assertEquals(GateStatus.DECKED, result.getStatus());
+    }
+
+    @Test
+    void aDepartedContainerCanReturnToTheTerminalLater() {
+        // Containers are reusable steel boxes - the same ID legitimately comes back.
+        when(repository.findFirstByContainerIdAndStatusInOrderByCheckInTimeDesc(eq("ABCD1234567"), any()))
+                .thenReturn(Optional.empty());
+        when(deckingClient.requestSlot(any())).thenReturn(deckedResponse());
+
+        CheckInRequest secondVisit = new CheckInRequest();
+        secondVisit.setContainerId("ABCD1234567");
+        secondVisit.setWeightKg(24000.0);
+        secondVisit.setReefer(false);
+
+        assertEquals(GateStatus.DECKED, gateService.checkIn(secondVisit).transaction().getStatus());
+    }
+
+    @Test
+    void aContainerStillInTheYardIsStillRejectedAsADuplicate() {
+        when(repository.findFirstByContainerIdAndStatusInOrderByCheckInTimeDesc(eq("ABCD1234567"), any()))
+                .thenReturn(Optional.of(deckedTransaction()));
+
+        CheckInRequest request = new CheckInRequest();
+        request.setContainerId("ABCD1234567");
+        request.setWeightKg(24000.0);
+        request.setReefer(false);
+
+        assertThrows(DuplicateContainerException.class, () -> gateService.checkIn(request));
+        verify(deckingClient, never()).requestSlot(any());
+    }
+
+    @Test
+    void onlyActiveVisitsAreConsideredWhenLookingUpAContainer() {
+        // The duplicate guard must query by status, never by container id alone -
+        // otherwise a finished visit would block the container forever.
+        when(repository.findFirstByContainerIdAndStatusInOrderByCheckInTimeDesc(eq("ABCD1234567"), any()))
+                .thenReturn(Optional.empty());
+        when(deckingClient.requestSlot(any())).thenReturn(deckedResponse());
+
+        CheckInRequest request = new CheckInRequest();
+        request.setContainerId("ABCD1234567");
+        request.setWeightKg(24000.0);
+        request.setReefer(false);
+        gateService.checkIn(request);
+
+        verify(repository).findFirstByContainerIdAndStatusInOrderByCheckInTimeDesc(
+                eq("ABCD1234567"),
+                argThat(statuses -> statuses.containsAll(
+                        java.util.List.of(GateStatus.PENDING, GateStatus.DECKED, GateStatus.HELD))
+                        && !statuses.contains(GateStatus.DEPARTED)
+                        && !statuses.contains(GateStatus.REJECTED)
+                        && !statuses.contains(GateStatus.LOADED)));
     }
 
     @Test
@@ -102,7 +178,8 @@ class GateServiceTest {
         GateTransaction tx = deckedTransaction();
         tx.setHoldType(HoldType.CUSTOMS_HOLD);
         tx.setHoldReason("Pending customs inspection");
-        when(repository.findByContainerId("ABCD1234567")).thenReturn(Optional.of(tx));
+        when(repository.findFirstByContainerIdAndStatusInOrderByCheckInTimeDesc(eq("ABCD1234567"), any()))
+                .thenReturn(Optional.of(tx));
 
         assertThrows(ActiveHoldException.class, () -> gateService.checkOut("ABCD1234567"));
         verify(deckingClient, never()).releaseSlot(any());
@@ -111,7 +188,8 @@ class GateServiceTest {
     @Test
     void checkOutSucceedsAfterHoldIsCleared() {
         GateTransaction tx = deckedTransaction();
-        when(repository.findByContainerId("ABCD1234567")).thenReturn(Optional.of(tx));
+        when(repository.findFirstByContainerIdAndStatusInOrderByCheckInTimeDesc(eq("ABCD1234567"), any()))
+                .thenReturn(Optional.of(tx));
 
         ReleaseSlotResponse released = new ReleaseSlotResponse();
         released.setReleased(true);
@@ -126,7 +204,8 @@ class GateServiceTest {
     @Test
     void applyHoldThenCheckOutIsBlockedThenClearHoldAllowsCheckOut() {
         GateTransaction tx = deckedTransaction();
-        when(repository.findByContainerId("ABCD1234567")).thenReturn(Optional.of(tx));
+        when(repository.findFirstByContainerIdAndStatusInOrderByCheckInTimeDesc(eq("ABCD1234567"), any()))
+                .thenReturn(Optional.of(tx));
 
         GateTransaction held = gateService.applyHold("ABCD1234567", HoldType.DAMAGE_HOLD, "Structural damage reported");
         assertEquals(HoldType.DAMAGE_HOLD, held.getHoldType());
@@ -148,7 +227,8 @@ class GateServiceTest {
     @Test
     void loadToVesselSucceedsAndSetsStatusLoadedWithCoordinates() {
         GateTransaction tx = deckedTransaction();
-        when(repository.findByContainerId("ABCD1234567")).thenReturn(Optional.of(tx));
+        when(repository.findFirstByContainerIdAndStatusInOrderByCheckInTimeDesc(eq("ABCD1234567"), any()))
+                .thenReturn(Optional.of(tx));
 
         ReleaseSlotResponse released = new ReleaseSlotResponse();
         released.setReleased(true);
@@ -173,7 +253,8 @@ class GateServiceTest {
     void loadToVesselBlockedByActiveHoldNeverReachesTheYardOrVessel() {
         GateTransaction tx = deckedTransaction();
         tx.setHoldType(HoldType.CUSTOMS_HOLD);
-        when(repository.findByContainerId("ABCD1234567")).thenReturn(Optional.of(tx));
+        when(repository.findFirstByContainerIdAndStatusInOrderByCheckInTimeDesc(eq("ABCD1234567"), any()))
+                .thenReturn(Optional.of(tx));
 
         assertThrows(ActiveHoldException.class, () -> gateService.loadToVessel("ABCD1234567", 1, 1, 1));
         verify(deckingClient, never()).releaseSlot(any());
@@ -184,7 +265,8 @@ class GateServiceTest {
     void loadToVesselRejectsWhenNotCurrentlyDecked() {
         GateTransaction tx = deckedTransaction();
         tx.setStatus(GateStatus.PENDING);
-        when(repository.findByContainerId("ABCD1234567")).thenReturn(Optional.of(tx));
+        when(repository.findFirstByContainerIdAndStatusInOrderByCheckInTimeDesc(eq("ABCD1234567"), any()))
+                .thenReturn(Optional.of(tx));
 
         assertThrows(com.navislite.gateway.exception.InvalidGateStatusException.class,
                 () -> gateService.loadToVessel("ABCD1234567", 1, 1, 1));
@@ -193,7 +275,8 @@ class GateServiceTest {
     @Test
     void loadToVesselThrowsWhenVesselEngineRejectsThePlacement() {
         GateTransaction tx = deckedTransaction();
-        when(repository.findByContainerId("ABCD1234567")).thenReturn(Optional.of(tx));
+        when(repository.findFirstByContainerIdAndStatusInOrderByCheckInTimeDesc(eq("ABCD1234567"), any()))
+                .thenReturn(Optional.of(tx));
 
         ReleaseSlotResponse released = new ReleaseSlotResponse();
         released.setReleased(true);

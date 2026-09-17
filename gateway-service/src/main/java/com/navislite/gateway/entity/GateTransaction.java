@@ -14,7 +14,13 @@ public class GateTransaction {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "container_id", nullable = false, unique = true, length = 11)
+    // Deliberately NOT unique. A container is a reusable steel box: it leaves the
+    // terminal and comes back weeks later, and a container turned away at the gate
+    // may be re-presented once space frees up. Each visit is its own row, so the
+    // ledger keeps full history and the dwell model gets every completed visit as
+    // a training example. Only one visit may be *active* at a time — enforced in
+    // GateService.checkIn rather than by the schema.
+    @Column(name = "container_id", nullable = false, length = 11)
     private String containerId;
 
     @Column(name = "weight_kg", nullable = false)

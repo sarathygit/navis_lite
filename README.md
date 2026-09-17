@@ -10,16 +10,18 @@ live telemetry simulation, and a digital-twin yard dashboard.
 | Layer | Tech | Responsibility |
 |---|---|---|
 | `gateway-service/` | Java 17, Spring Boot, Spring Data JPA, MySQL Connector/J | Gate check-in REST API, ISO 6346 validation, transaction persistence |
-| `decking-engine/` | Python, FastAPI, Pandas, NumPy, Scikit-learn | Slot placement algorithm, weight-tier rules, reefer Block-R routing, telemetry simulation |
+| `decking-engine/` | Python, FastAPI, Pandas, NumPy, Scikit-learn | Slot placement algorithm, stacking rules, relocation advice, reefer Block-R routing, telemetry simulation |
 | `dashboard/` | React | Operational Ledger, Digital Twin Yard Matrix, Alert Ticker |
 | `mysql` | MySQL 8 | Terminal state (gate transactions, yard slots) |
 
 Data flow: truck arrives → `gateway-service` validates ISO 6346 format + weight →
 persists transaction → synchronously calls `decking-engine` at `/api/predict-decking` →
-decking engine applies weight-tier constraint (>20,000 kg → Tier 1-2 only), reefer
-Block-R power-zone filter, and an ML dwell-time/shuffle-risk score → returns slot
-assignment → `gateway-service` persists final placement → `dashboard` polls both
-services and renders the ledger, yard grid, and any live telemetry alerts.
+decking engine applies the stacking constraint (a container may only rest on one at
+least as heavy), the reefer Block-R power-zone filter, and an ML dwell-time/shuffle-risk
+score → returns a slot assignment, or a rejection carrying the single best relocation
+that would make room → `gateway-service` persists final placement → `dashboard` polls
+both services and renders the ledger, yard grid, relocation advice, and any live
+telemetry alerts.
 
 ## Running locally
 
@@ -47,8 +49,18 @@ navis-lite/
 ## Business rules
 
 - **ISO 6346**: container IDs must match `[A-Z]{4}\d{7}` (4 uppercase letters + 7 digits).
-- **Weight-tier policy**: containers over 20,000 kg are restricted to Tier 1 or 2;
-  lighter containers are routed to Tier 3, 4, or 5.
+- **Stacking policy**: tier 1 is the ground and accepts anything, so a container
+  arriving at an empty yard is always placed rather than turned away. Above ground a
+  container may only rest on one at least as heavy, so stacks build heaviest-at-the-
+  bottom — a heavier box on a lighter one risks crushing its corner posts and raises
+  the stack's centre of gravity. Stacks also fill bottom-up; no floating slots.
+- **Relocation advice**: when nothing is legal, the engine does not simply reject. It
+  searches for the single best housekeeping move that would make the container
+  placeable — a container with nothing stacked on it, that has somewhere legal to go,
+  and whose slot once freed genuinely accepts the arrival. Candidates are ranked by
+  the destination's own shuffle risk (so the move does not create tomorrow's rehandle)
+  plus a penalty for disturbing cargo that is about to depart. The system proposes;
+  a crane operator decides. Nothing is moved automatically.
 - **Reefer routing**: containers flagged `REEFER` may only be placed in powered
   slots within `Block-R`.
 - **Telemetry alerts**: the decking engine runs a background simulation loop over

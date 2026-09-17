@@ -18,6 +18,14 @@ const PENALTY_COLORS = {
 
 const HOLD_TYPES = ["CUSTOMS_HOLD", "VESSEL_CUTOFF_EXPIRED", "DAMAGE_HOLD"];
 
+// Vessel grid is 6 bays x 4 rows x 4 tiers (decking-engine/app/core/config.py).
+// Surfacing the ceiling here keeps the form honest about what the engine accepts.
+const VESSEL_COORDS = [
+  { key: "bay", label: "Bay", max: 6 },
+  { key: "row", label: "Row", max: 4 },
+  { key: "tier", label: "Tier", max: 4 },
+];
+
 export default function OperationalLedger({ transactions, onChanged }) {
   const [pendingId, setPendingId] = useState(null);
   const [error, setError] = useState(null);
@@ -196,27 +204,25 @@ export default function OperationalLedger({ transactions, onChanged }) {
                   )}
                   {tx.status === "DECKED" && !tx.holdType && (
                     <span className="vessel-control">
-                      <input
-                        type="number"
-                        min="1"
-                        placeholder="Bay"
-                        value={vesselCoords[tx.containerId]?.bay ?? 1}
-                        onChange={(e) => updateVesselCoord(tx.containerId, "bay", e.target.value)}
-                      />
-                      <input
-                        type="number"
-                        min="1"
-                        placeholder="Row"
-                        value={vesselCoords[tx.containerId]?.row ?? 1}
-                        onChange={(e) => updateVesselCoord(tx.containerId, "row", e.target.value)}
-                      />
-                      <input
-                        type="number"
-                        min="1"
-                        placeholder="Tier"
-                        value={vesselCoords[tx.containerId]?.tier ?? 1}
-                        onChange={(e) => updateVesselCoord(tx.containerId, "tier", e.target.value)}
-                      />
+                      <span className="vessel-coords">
+                        <span className="vessel-coords-legend">Ship position</span>
+                        <span className="vessel-fields">
+                          {VESSEL_COORDS.map(({ key, label, max }) => (
+                            <label key={key} className="coord-field">
+                              <span className="coord-label">{label}</span>
+                              <input
+                                type="number"
+                                min="1"
+                                max={max}
+                                title={`${label} (1–${max})`}
+                                aria-label={`Vessel ${label.toLowerCase()} for ${tx.containerId}`}
+                                value={vesselCoords[tx.containerId]?.[key] ?? 1}
+                                onChange={(e) => updateVesselCoord(tx.containerId, key, e.target.value)}
+                              />
+                            </label>
+                          ))}
+                        </span>
+                      </span>
                       <button
                         className="vessel-load-btn"
                         disabled={pendingId === tx.containerId}

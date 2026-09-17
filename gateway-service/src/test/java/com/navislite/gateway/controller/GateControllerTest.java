@@ -1,7 +1,9 @@
 package com.navislite.gateway.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.navislite.gateway.dto.CheckInOutcome;
 import com.navislite.gateway.dto.CheckInRequest;
+import com.navislite.gateway.dto.RelocationSuggestion;
 import com.navislite.gateway.dto.CheckOutRequest;
 import com.navislite.gateway.dto.HoldRequest;
 import com.navislite.gateway.dto.LoadToVesselRequest;
@@ -87,7 +89,7 @@ class GateControllerTest {
         saved.setAssignedBlock("Block-A");
         saved.setAssignedTier(3);
 
-        when(gateService.checkIn(any(CheckInRequest.class))).thenReturn(saved);
+        when(gateService.checkIn(any(CheckInRequest.class))).thenReturn(CheckInOutcome.placed(saved));
 
         mockMvc.perform(post("/api/gate/check-in")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -96,6 +98,49 @@ class GateControllerTest {
                 .andExpect(jsonPath("$.containerId").value("ABCD1234567"))
                 .andExpect(jsonPath("$.status").value("DECKED"))
                 .andExpect(jsonPath("$.assignedBlock").value("Block-A"));
+    }
+
+    @Test
+    void rejectedCheckInReturnsTheRelocationAdviceToTheOperator() throws Exception {
+        CheckInRequest request = new CheckInRequest();
+        request.setContainerId("ABCD1234567");
+        request.setWeightKg(28000.0);
+        request.setReefer(false);
+        request.setDestination("Block-A");
+
+        GateTransaction saved = new GateTransaction();
+        saved.setId(2L);
+        saved.setContainerId("ABCD1234567");
+        saved.setStatus(GateStatus.REJECTED);
+
+        RelocationSuggestion advice = new RelocationSuggestion();
+        advice.setMoveContainerId("LGHT0000001");
+        advice.setFromBlock("A");
+        advice.setFromRow(1);
+        advice.setFromBay(1);
+        advice.setFromTier(1);
+        advice.setToBlock("A");
+        advice.setToRow(1);
+        advice.setToBay(2);
+        advice.setToTier(2);
+        advice.setThenPlaceAtBlock("A");
+        advice.setThenPlaceAtRow(1);
+        advice.setThenPlaceAtBay(1);
+        advice.setThenPlaceAtTier(1);
+        advice.setReason("Move LGHT0000001 up to free a ground slot");
+
+        when(gateService.checkIn(any(CheckInRequest.class)))
+                .thenReturn(new CheckInOutcome(saved, advice));
+
+        mockMvc.perform(post("/api/gate/check-in")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("REJECTED"))
+                .andExpect(jsonPath("$.suggestion.moveContainerId").value("LGHT0000001"))
+                .andExpect(jsonPath("$.suggestion.fromTier").value(1))
+                .andExpect(jsonPath("$.suggestion.toTier").value(2))
+                .andExpect(jsonPath("$.suggestion.thenPlaceAtTier").value(1));
     }
 
     @Test

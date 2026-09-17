@@ -1,6 +1,8 @@
 package com.navislite.gateway.service;
 
+import com.navislite.gateway.dto.CheckInOutcome;
 import com.navislite.gateway.dto.CheckInRequest;
+import com.navislite.gateway.dto.RelocationSuggestion;
 import com.navislite.gateway.dto.DeckingRequest;
 import com.navislite.gateway.dto.DeckingResponse;
 import com.navislite.gateway.dto.ReleaseSlotRequest;
@@ -40,11 +42,28 @@ public class GateService {
         this.vesselClient = vesselClient;
     }
 
+    /**
+     * States in which a container is still physically the terminal's problem.
+     * Anything else (REJECTED, DEPARTED, LOADED) is a finished visit.
+     */
+    private static final List<GateStatus> ACTIVE_STATUSES =
+            List.of(GateStatus.PENDING, GateStatus.DECKED, GateStatus.HELD);
+
+    private GateTransaction requireActive(String containerId) {
+        return repository
+                .findFirstByContainerIdAndStatusInOrderByCheckInTimeDesc(containerId, ACTIVE_STATUSES)
+                .orElseThrow(() -> new TransactionNotFoundException(containerId));
+    }
+
     @Transactional
-    public GateTransaction checkIn(CheckInRequest request) {
-        repository.findByContainerId(request.getContainerId()).ifPresent(existing -> {
-            throw new DuplicateContainerException(request.getContainerId());
-        });
+    public CheckInOutcome checkIn(CheckInRequest request) {
+        // Only an in-progress visit blocks a new one. A container that was rejected,
+        // has departed, or has sailed is free to be presented at the gate again.
+        repository.findFirstByContainerIdAndStatusInOrderByCheckInTimeDesc(
+                        request.getContainerId(), ACTIVE_STATUSES)
+                .ifPresent(existing -> {
+                    throw new DuplicateContainerException(request.getContainerId(), existing.getStatus());
+                });
 
         GateTransaction tx = new GateTransaction();
         tx.setContainerId(request.getContainerId());
@@ -58,7 +77,7 @@ public class GateService {
             tx.setHoldType(HoldType.VESSEL_CUTOFF_EXPIRED);
             tx.setHoldReason("Vessel cutoff " + request.getVesselCutoffTime() + " has already passed");
             tx.setStatus(GateStatus.HELD);
-            return repository.save(tx);
+            return CheckInOutcome.placed(repository.save(tx));
         }
 
         tx = repository.save(tx);
@@ -84,15 +103,15 @@ public class GateService {
 
         if (tx.getStatus() == GateStatus.DECKED) {
             equipmentDispatchService.createWorkInstruction(tx.getContainerId(), TaskType.YARD_PLACEMENT);
+            return CheckInOutcome.placed(tx);
         }
 
-        return tx;
+        return new CheckInOutcome(tx, decking.getSuggestion());
     }
 
     @Transactional
     public GateTransaction checkOut(String containerId) {
-        GateTransaction tx = repository.findByContainerId(containerId)
-                .orElseThrow(() -> new TransactionNotFoundException(containerId));
+        GateTransaction tx = requireActive(containerId);
 
         if (tx.getStatus() != GateStatus.DECKED) {
             throw new InvalidGateStatusException(containerId, tx.getStatus(), GateStatus.DECKED);
@@ -122,12 +141,9 @@ public class GateService {
 
     @Transactional
     public GateTransaction applyHold(String containerId, HoldType holdType, String reason) {
-        GateTransaction tx = repository.findByContainerId(containerId)
-                .orElseThrow(() -> new TransactionNotFoundException(containerId));
-
-        if (tx.getStatus() == GateStatus.DEPARTED || tx.getStatus() == GateStatus.LOADED) {
-            throw new InvalidGateStatusException(containerId, tx.getStatus(), GateStatus.DECKED);
-        }
+        // requireActive already excludes finished visits, so a departed or loaded
+        // container surfaces as "not currently in the terminal" rather than reaching here.
+        GateTransaction tx = requireActive(containerId);
 
         tx.setHoldType(holdType);
         tx.setHoldReason(reason);
@@ -136,8 +152,7 @@ public class GateService {
 
     @Transactional
     public GateTransaction clearHold(String containerId) {
-        GateTransaction tx = repository.findByContainerId(containerId)
-                .orElseThrow(() -> new TransactionNotFoundException(containerId));
+        GateTransaction tx = requireActive(containerId);
 
         tx.setHoldType(null);
         tx.setHoldReason(null);
@@ -146,8 +161,7 @@ public class GateService {
 
     @Transactional
     public GateTransaction loadToVessel(String containerId, Integer bay, Integer row, Integer tier) {
-        GateTransaction tx = repository.findByContainerId(containerId)
-                .orElseThrow(() -> new TransactionNotFoundException(containerId));
+        GateTransaction tx = requireActive(containerId);
 
         if (tx.getStatus() != GateStatus.DECKED) {
             throw new InvalidGateStatusException(containerId, tx.getStatus(), GateStatus.DECKED);

@@ -3,11 +3,12 @@
 Given an incoming container, generates every structurally legal candidate slot,
 scores each with the ML dwell-time model plus a shuffle-risk heuristic, and
 selects the best one. Two hard constraints gate candidate generation before
-scoring ever happens:
+scoring ever happens. When nothing is legal, the engine proposes the single
+best housekeeping move that would make the container placeable.
 
-  1. Weight policy: heavy cargo (>20,000 kg) is restricted to Tier 1-2; light
-     cargo is restricted to Tier 3-5. Stacks fill bottom-up, so this also means
-     a stack needs a heavy "base" before it can accept a light container above it.
+  1. Stacking policy: tier 1 is the ground and accepts anything; above it a
+     container may only rest on one at least as heavy, so stacks build
+     heaviest-at-the-bottom. Stacks also fill bottom-up — no floating slots.
   2. Reefer policy: REEFER containers may only be placed in the powered Block-R;
      non-reefer containers may never be placed in Block-R (it's a hard boundary
      in both directions, not just a preference).
@@ -17,22 +18,39 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from app.core.config import (
-    HEAVY_ALLOWED_TIERS,
     HEAVY_WEIGHT_THRESHOLD_KG,
-    LIGHT_ALLOWED_TIERS,
     MAX_REHANDLE_DELTA_DAYS,
     REEFER_BLOCK,
+    RELOCATION_URGENCY_HORIZON_DAYS,
     REHANDLE_PENALTY_HIGH_THRESHOLD,
     REHANDLE_PENALTY_MEDIUM_THRESHOLD,
     STANDARD_BLOCKS,
 )
-from app.models.schemas import DeckingRequest, DeckingResponse, ReleaseSlotResponse
+from app.models.schemas import (
+    DeckingRequest,
+    DeckingResponse,
+    RelocationSuggestion,
+    ReleaseSlotResponse,
+)
 from app.services.ml_model import dwell_time_model
 from app.services.yard_state import SlotOccupant, YardState
 
 
-def allowed_tiers_for_weight(weight_kg: float) -> tuple[int, ...]:
-    return HEAVY_ALLOWED_TIERS if weight_kg > HEAVY_WEIGHT_THRESHOLD_KG else LIGHT_ALLOWED_TIERS
+def can_stack_on(candidate_weight_kg: float, below: Optional[SlotOccupant]) -> bool:
+    """Whether a container may physically rest on what is beneath it.
+
+    Tier 1 is the ground: anything may be set down on a free ground slot, which
+    is how a real terminal behaves — a light container arriving at an empty yard
+    is simply placed, never turned away.
+
+    Above ground, a container may only sit on one at least as heavy. A container's
+    corner posts carry a rated stacking load, and putting a heavier box on a
+    lighter one both risks crushing it and lifts the stack's centre of gravity.
+    The effect is that stacks naturally build heaviest-at-the-bottom.
+    """
+    if below is None:
+        return True
+    return candidate_weight_kg <= below.weight_kg
 
 
 def eligible_blocks(reefer: bool) -> list[str]:
@@ -78,29 +96,128 @@ class Candidate:
         return self.shuffle_risk * 10.0 + self.dwell_days
 
 
-def find_best_slot(request: DeckingRequest, yard: YardState) -> DeckingResponse:
-    tiers = allowed_tiers_for_weight(request.weight_kg)
-    blocks = eligible_blocks(request.reefer)
+def _legal_candidates(weight_kg: float, reefer: bool, yard: YardState,
+                       exclude_stack: Optional[tuple[str, int, int]] = None) -> list["Candidate"]:
+    """Every slot this container could legally occupy right now, scored.
 
+    `exclude_stack` removes one whole stack from consideration during a
+    relocation search. It has to be the whole stack, not just the slot being
+    vacated: lifting a container off a stack changes that stack's geometry, so
+    the slot immediately above it is only "open" while the container is still
+    there holding it up. Proposing that slot would tell the crane to set the
+    container back down on top of itself.
+    """
     candidates: list[Candidate] = []
+    for block in eligible_blocks(reefer):
+        for row, bay in yard.candidate_stacks(block):
+            open_tier = yard.next_open_tier(block, row, bay)
+            if open_tier is None:
+                continue
+            if exclude_stack is not None and (block, row, bay) == exclude_stack:
+                continue
+            below = yard.occupant_below(block, row, bay, open_tier)
+            if not can_stack_on(weight_kg, below):
+                continue
+            dwell_days = dwell_time_model.predict(weight_kg, reefer, open_tier)
+            risk = compute_shuffle_risk(dwell_days, below)
+            candidates.append(Candidate(block, row, bay, open_tier, dwell_days, risk))
+    return candidates
+
+
+def _remaining_dwell(occupant: SlotOccupant) -> float:
+    """Roughly how much longer this container is expected to stay.
+
+    The model predicts total dwell at placement time, so what is left is that
+    estimate minus the time already served. Never negative — an overdue
+    container is treated as leaving imminently.
+    """
+    placed_at = occupant.placed_at
+    if placed_at.tzinfo is None:
+        # Defensive: a naive timestamp from any source would otherwise raise
+        # TypeError here and fail the whole placement request.
+        placed_at = placed_at.replace(tzinfo=timezone.utc)
+    elapsed_days = (datetime.now(timezone.utc) - placed_at).total_seconds() / 86_400.0
+    return max(0.0, occupant.dwell_time_estimate - elapsed_days)
+
+
+def suggest_relocation(request: DeckingRequest, yard: YardState) -> Optional[RelocationSuggestion]:
+    """Finds the single best container to move so the arriving one can be placed.
+
+    Only proposes a move that actually solves the problem: the container must be
+    liftable (nothing stacked on it), it must have somewhere legal to go, and
+    freeing its slot must genuinely make the arriving container placeable.
+
+    Among the moves that work, the cheapest is chosen. Cost has two parts:
+
+      * the destination's own shuffle risk, so relocating does not simply create
+        tomorrow's rehandle somewhere else; and
+      * an urgency penalty for disturbing a container that is about to leave —
+        moving a box that departs in hours is wasted crane work, while one
+        staying for days has to sit somewhere regardless.
+    """
+    best: Optional[RelocationSuggestion] = None
+    best_cost: Optional[float] = None
+
+    for block, row, bay, tier, occupant in list(yard.all_slots()):
+        if occupant is None:
+            continue
+
+        # Only the top of a stack can be lifted.
+        if yard.occupants_above(block, row, bay, tier):
+            continue
+
+        # Where could this container go instead? Never back into its own stack.
+        destinations = _legal_candidates(
+            occupant.weight_kg, occupant.reefer, yard, exclude_stack=(block, row, bay)
+        )
+        if not destinations:
+            continue
+        destination = min(destinations, key=Candidate.score)
+
+        # Would freeing this slot actually let the arriving container in?
+        below_origin = yard.occupant_below(block, row, bay, tier)
+        if not can_stack_on(request.weight_kg, below_origin):
+            continue
+        if request.reefer != (block == REEFER_BLOCK):
+            continue
+
+        urgency_penalty = max(0.0, RELOCATION_URGENCY_HORIZON_DAYS - _remaining_dwell(occupant))
+        cost = destination.shuffle_risk * 10.0 + urgency_penalty
+
+        if best_cost is None or cost < best_cost:
+            best_cost = cost
+            best = RelocationSuggestion(
+                move_container_id=occupant.container_id,
+                from_block=block, from_row=row, from_bay=bay, from_tier=tier,
+                to_block=destination.block, to_row=destination.row,
+                to_bay=destination.bay, to_tier=destination.tier,
+                then_place_at_block=block, then_place_at_row=row,
+                then_place_at_bay=bay, then_place_at_tier=tier,
+                reason=(
+                    f"Relocate {occupant.container_id} from "
+                    f"{block}-{row:02d}-{bay:02d} tier {tier} to "
+                    f"{destination.block}-{destination.row:02d}-{destination.bay:02d} "
+                    f"tier {destination.tier}, freeing {block}-{row:02d}-{bay:02d} "
+                    f"tier {tier} for {request.container_id}"
+                ),
+            )
+
+    return best
+
+
+def find_best_slot(request: DeckingRequest, yard: YardState) -> DeckingResponse:
     with yard.lock():
-        for block in blocks:
-            for row, bay in yard.candidate_stacks(block):
-                open_tier = yard.next_open_tier(block, row, bay)
-                if open_tier is None or open_tier not in tiers:
-                    continue
-                dwell_days = dwell_time_model.predict(request.weight_kg, request.reefer, open_tier)
-                below = yard.occupant_below(block, row, bay, open_tier)
-                risk = compute_shuffle_risk(dwell_days, below)
-                candidates.append(Candidate(block, row, bay, open_tier, dwell_days, risk))
+        candidates = _legal_candidates(request.weight_kg, request.reefer, yard)
 
         if not candidates:
+            suggestion = suggest_relocation(request, yard)
             return DeckingResponse(
                 placed=False,
                 reason=(
-                    f"No open slot available for weight={request.weight_kg}kg "
-                    f"reefer={request.reefer} within allowed tiers {tiers}"
+                    f"No slot available for {request.container_id} "
+                    f"({request.weight_kg:.0f}kg, {'reefer' if request.reefer else 'dry'})"
                 ),
+                suggestion=suggestion,
             )
 
         best = min(candidates, key=Candidate.score)

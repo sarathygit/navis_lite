@@ -29,6 +29,7 @@ public class CheckInResponse {
     private Integer vesselBay;
     private Integer vesselRow;
     private Integer vesselTier;
+    private RelocationSuggestion suggestion;
 
     public static CheckInResponse fromEntity(GateTransaction tx) {
         CheckInResponse dto = new CheckInResponse();
@@ -138,5 +139,13 @@ public class CheckInResponse {
 
     public Integer getVesselTier() {
         return vesselTier;
+    }
+
+    public RelocationSuggestion getSuggestion() {
+        return suggestion;
+    }
+
+    public void setSuggestion(RelocationSuggestion suggestion) {
+        this.suggestion = suggestion;
     }
 }

@@ -13,6 +13,31 @@ class DeckingRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class RelocationSuggestion(BaseModel):
+    """A single housekeeping move that would make a rejected container placeable.
+
+    The system proposes; it does not act. A crane operator decides whether the
+    move is worth making, exactly as with a buried-container check-out.
+    """
+
+    move_container_id: str = Field(..., alias="moveContainerId")
+    from_block: str = Field(..., alias="fromBlock")
+    from_row: int = Field(..., alias="fromRow")
+    from_bay: int = Field(..., alias="fromBay")
+    from_tier: int = Field(..., alias="fromTier")
+    to_block: str = Field(..., alias="toBlock")
+    to_row: int = Field(..., alias="toRow")
+    to_bay: int = Field(..., alias="toBay")
+    to_tier: int = Field(..., alias="toTier")
+    then_place_at_block: str = Field(..., alias="thenPlaceAtBlock")
+    then_place_at_row: int = Field(..., alias="thenPlaceAtRow")
+    then_place_at_bay: int = Field(..., alias="thenPlaceAtBay")
+    then_place_at_tier: int = Field(..., alias="thenPlaceAtTier")
+    reason: str
+
+    model_config = {"populate_by_name": True, "by_alias": True}
+
+
 class DeckingResponse(BaseModel):
     block: Optional[str] = None
     row: Optional[int] = None
@@ -23,6 +48,7 @@ class DeckingResponse(BaseModel):
     penalty_flag: Optional[str] = Field(None, alias="penaltyFlag")
     placed: bool
     reason: Optional[str] = None
+    suggestion: Optional[RelocationSuggestion] = None
 
     model_config = {"populate_by_name": True, "by_alias": True}
 

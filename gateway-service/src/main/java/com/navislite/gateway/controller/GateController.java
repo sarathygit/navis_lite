@@ -1,5 +1,6 @@
 package com.navislite.gateway.controller;
 
+import com.navislite.gateway.dto.CheckInOutcome;
 import com.navislite.gateway.dto.CheckInRequest;
 import com.navislite.gateway.dto.CheckInResponse;
 import com.navislite.gateway.dto.CheckOutRequest;
@@ -27,8 +28,10 @@ public class GateController {
 
     @PostMapping("/check-in")
     public ResponseEntity<CheckInResponse> checkIn(@Valid @RequestBody CheckInRequest request) {
-        GateTransaction tx = gateService.checkIn(request);
-        return ResponseEntity.status(HttpStatus.CREATED).body(CheckInResponse.fromEntity(tx));
+        CheckInOutcome outcome = gateService.checkIn(request);
+        CheckInResponse body = CheckInResponse.fromEntity(outcome.transaction());
+        body.setSuggestion(outcome.suggestion());
+        return ResponseEntity.status(HttpStatus.CREATED).body(body);
     }
 
     @PostMapping("/check-out")

@@ -87,6 +87,18 @@ class YardState:
         with self._lock:
             return self._occupancy.pop((block, row, bay, tier), None)
 
+    def is_open(self, block: str, row: int, bay: int, tier: int) -> bool:
+        with self._lock:
+            return (block, row, bay, tier) not in self._occupancy
+
+    def clear(self) -> None:
+        with self._lock:
+            self._occupancy.clear()
+
+    def occupied_count(self) -> int:
+        with self._lock:
+            return len(self._occupancy)
+
     def candidate_stacks(self, block: str):
         rows, bays = self._stack_dims[block]
         for row in range(1, rows + 1):

@@ -4,9 +4,11 @@ import os
 
 # Weight-tier policy: heavy cargo is structurally restricted to the lowest tiers.
 HEAVY_WEIGHT_THRESHOLD_KG = 20_000.0
-HEAVY_ALLOWED_TIERS = (1, 2)
-LIGHT_ALLOWED_TIERS = (3, 4, 5)
 MAX_TIER = 5
+
+# Relocation suggestions: moving a container that is about to depart is wasted
+# crane work, so proposals are penalised the closer the container is to leaving.
+RELOCATION_URGENCY_HORIZON_DAYS = 2.0
 
 # Yard layout: standard dry blocks + one isolated powered reefer block.
 STANDARD_BLOCKS = ["A", "B", "C"]

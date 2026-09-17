@@ -50,6 +50,14 @@ class VesselState:
         with self._lock:
             self._occupancy[(bay, row, tier)] = occupant
 
+    def clear(self) -> None:
+        with self._lock:
+            self._occupancy.clear()
+
+    def occupied_count(self) -> int:
+        with self._lock:
+            return len(self._occupancy)
+
     def find_slot_by_container_id(self, container_id: str) -> Optional[tuple[int, int, int]]:
         with self._lock:
             for coord, occupant in self._occupancy.items():

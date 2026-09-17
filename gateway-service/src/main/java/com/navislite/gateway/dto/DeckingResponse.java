@@ -15,6 +15,7 @@ public class DeckingResponse {
     private String penaltyFlag;
     private boolean placed;
     private String reason;
+    private RelocationSuggestion suggestion;
 
     public String getBlock() {
         return block;
@@ -78,6 +79,14 @@ public class DeckingResponse {
 
     public void setPlaced(boolean placed) {
         this.placed = placed;
+    }
+
+    public RelocationSuggestion getSuggestion() {
+        return suggestion;
+    }
+
+    public void setSuggestion(RelocationSuggestion suggestion) {
+        this.suggestion = suggestion;
     }
 
     public String getReason() {

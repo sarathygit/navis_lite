@@ -534,18 +534,57 @@ body {
 
 .vessel-control {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.vessel-coords {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.vessel-coords-legend {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.vessel-fields {
+  display: inline-flex;
   gap: 4px;
 }
 
+.coord-field {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.coord-label {
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  line-height: 1;
+}
+
 .vessel-control input {
-  width: 36px;
+  width: 38px;
   background: #0d1117;
   border: 1px solid var(--border);
   color: var(--text);
-  font-size: 10px;
-  padding: 2px 4px;
+  font-size: 11px;
+  text-align: center;
+  padding: 3px 4px;
   border-radius: 4px;
+}
+
+.vessel-control input:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .vessel-load-btn {
@@ -560,4 +599,64 @@ body {
 
 .vessel-load-btn:hover:not(:disabled) {
   background: #a371f722;
+}
+
+/* Advisory panel shown when a container is rejected for want of a legal slot. */
+.rejection-advice {
+  flex-basis: 100%;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid #e5534b;
+  border-left-width: 3px;
+  border-radius: 4px;
+  background: #e5534b14;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.rejection-advice-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  color: #e5534b;
+}
+
+.rejection-advice-reason {
+  margin: 6px 0 0;
+  color: var(--text);
+}
+
+.rejection-advice-steps {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--text);
+}
+
+.rejection-advice-steps li + li {
+  margin-top: 4px;
+}
+
+.rejection-advice-steps .mono {
+  color: var(--accent);
+}
+
+.rejection-advice-note {
+  margin: 8px 0 0;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.link-button:hover {
+  color: var(--text);
 }

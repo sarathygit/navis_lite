@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi import APIRouter, Query
 
 from app.core.config import VESSEL_UPPER_DECK_MIN_TIER
@@ -21,6 +23,7 @@ from app.models.schemas import (
 )
 from app.services.decking_engine import find_best_slot, live_slot_risk, release_container
 from app.services.ml_model import dwell_time_model
+from app.services.state_sync import resync
 from app.services.telemetry import telemetry_simulator
 from app.services.vessel_engine import load_container
 from app.services.vessel_state import vessel_state
@@ -137,6 +140,17 @@ def retrain_model() -> ModelMetricsResponse:
     model off the synthetic corpus without a restart.
     """
     return ModelMetricsResponse(**dwell_time_model.retrain_from_history())
+
+
+@router.post("/state/resync")
+def resync_state() -> dict[str, Any]:
+    """Rebuilds the yard and vessel grids from the gateway's ledger.
+
+    The grids are in-memory, so this is what makes a restart survivable: the
+    ledger is the single source of truth and these grids are a view of it.
+    Runs automatically at start-up; exposed here for manual recovery.
+    """
+    return resync()
 
 
 @router.get("/health")

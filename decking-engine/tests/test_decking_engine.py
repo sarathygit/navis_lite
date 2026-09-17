@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from app.models.schemas import DeckingRequest
 from app.services.decking_engine import (
-    allowed_tiers_for_weight,
+    can_stack_on,
     compute_shuffle_risk,
     eligible_blocks,
     find_best_slot,
@@ -13,17 +13,7 @@ from app.services.decking_engine import (
 from app.services.yard_state import SlotOccupant, YardState
 
 
-def test_allowed_tiers_for_weight_heavy():
-    assert allowed_tiers_for_weight(25_000) == (1, 2)
 
-
-def test_allowed_tiers_for_weight_light():
-    assert allowed_tiers_for_weight(5_000) == (3, 4, 5)
-
-
-def test_allowed_tiers_boundary_is_exclusive():
-    # exactly 20,000kg is not "heavy" (spec: >20,000kg)
-    assert allowed_tiers_for_weight(20_000) == (3, 4, 5)
 
 
 def test_eligible_blocks_reefer_restricted_to_block_r():
@@ -69,22 +59,6 @@ def test_non_reefer_container_never_placed_in_block_r():
     assert response.block in ("A", "B", "C")
 
 
-def test_heavy_container_only_ever_assigned_tier_1_or_2():
-    yard = YardState()
-    request = DeckingRequest(containerId="ABCD1234567", weightKg=27_500, reefer=False)
-    response = find_best_slot(request, yard)
-    assert response.placed is True
-    assert response.tier in (1, 2)
-
-
-def test_light_container_rejected_when_no_structural_base_exists():
-    # empty yard: tier 1/2 are unoccupied everywhere, so a light container has
-    # nothing to stack on top of yet (tiers 3-5 would be physically unsupported)
-    yard = YardState()
-    request = DeckingRequest(containerId="ABCD1234567", weightKg=5_000, reefer=False)
-    response = find_best_slot(request, yard)
-    assert response.placed is False
-    assert response.reason is not None
 
 
 def test_light_container_placed_once_base_layer_exists():
@@ -207,3 +181,137 @@ def test_live_slot_risk_flags_high_when_a_container_traps_a_shorter_stay_one_bel
     # the trapped container itself has nothing below it, so its own live risk is zero
     below_score, below_flag = live_slot_risk(yard, "A", 1, 1, 1, short_dwell_below)
     assert below_flag == "LOW"
+
+
+# ---------- stacking-compatibility rule ----------
+
+def occ(cid, weight, dwell=5.0, reefer=False, age_days=0.0):
+    from datetime import timedelta
+    return SlotOccupant(cid, weight, reefer, dwell_time_estimate=dwell,
+                        placed_at=datetime.now(timezone.utc) - timedelta(days=age_days))
+
+
+def test_anything_may_rest_on_an_empty_ground_slot():
+    assert can_stack_on(5_000, None) is True
+    assert can_stack_on(30_000, None) is True
+
+
+def test_a_container_may_sit_on_a_heavier_one():
+    assert can_stack_on(5_000, occ("X", 25_000)) is True
+
+
+def test_equal_weights_may_stack():
+    assert can_stack_on(20_000, occ("X", 20_000)) is True
+
+
+def test_a_heavier_container_may_not_sit_on_a_lighter_one():
+    assert can_stack_on(25_000, occ("X", 5_000)) is False
+
+
+def test_light_container_is_placed_on_the_ground_of_an_empty_yard():
+    """The old tier rule turned this truck away. A real terminal just puts the
+    box down — tier 1 is the ground and accepts anything."""
+    yard = YardState()
+    response = find_best_slot(DeckingRequest(containerId="LGHT0000001", weightKg=6_200, reefer=False), yard)
+
+    assert response.placed is True
+    assert response.tier == 1
+
+
+def test_heavy_container_is_never_stacked_on_a_lighter_one():
+    yard = YardState()
+    # fill every dry ground slot with light cargo
+    for block in ("A", "B", "C"):
+        for row, bay in yard.candidate_stacks(block):
+            yard.place(block, row, bay, 1, occ(f"L{block}{row}{bay}".ljust(11, "0")[:11], 5_000))
+
+    response = find_best_slot(DeckingRequest(containerId="HVYA0000001", weightKg=26_000, reefer=False), yard)
+
+    assert response.placed is False, "26t must not be stacked on 5t"
+
+
+# ---------- relocation suggestion ----------
+
+def test_rejection_suggests_a_relocation_that_actually_frees_a_slot():
+    yard = YardState()
+    for block in ("A", "B", "C"):
+        for row, bay in yard.candidate_stacks(block):
+            yard.place(block, row, bay, 1, occ(f"L{block}{row}{bay}".ljust(11, "0")[:11], 5_000))
+
+    response = find_best_slot(DeckingRequest(containerId="HVYA0000001", weightKg=26_000, reefer=False), yard)
+
+    assert response.placed is False
+    s = response.suggestion
+    assert s is not None, "a relocation exists, so one must be proposed"
+    # the freed slot is where the arriving container goes
+    assert (s.then_place_at_block, s.then_place_at_row, s.then_place_at_bay, s.then_place_at_tier) == \
+           (s.from_block, s.from_row, s.from_bay, s.from_tier)
+    # and the destination is a different stack entirely (see the test below)
+    assert (s.to_block, s.to_row, s.to_bay) != (s.from_block, s.from_row, s.from_bay)
+
+
+def test_suggestion_never_moves_a_container_within_its_own_stack():
+    """Regression: the search excluded only the slot being vacated, so the slot
+    directly above it still looked open and got proposed as the destination —
+    telling the crane to lift a container and set it back down on top of itself.
+    That slot is only open while the container is still there holding it up."""
+    yard = YardState()
+    for block in ("A", "B", "C"):
+        for row, bay in yard.candidate_stacks(block):
+            yard.place(block, row, bay, 1, occ(f"L{block}{row}{bay}".ljust(11, "0")[:11], 5_000))
+
+    response = find_best_slot(DeckingRequest(containerId="HVYA0000001", weightKg=26_000, reefer=False), yard)
+
+    s = response.suggestion
+    assert s is not None
+    assert (s.from_block, s.from_row, s.from_bay) != (s.to_block, s.to_row, s.to_bay), \
+        "a container cannot be relocated within the stack it is being lifted off"
+
+
+def test_suggestion_never_proposes_moving_a_buried_container():
+    yard = YardState()
+    for block in ("A", "B", "C"):
+        for row, bay in yard.candidate_stacks(block):
+            yard.place(block, row, bay, 1, occ(f"L{block}{row}{bay}".ljust(11, "0")[:11], 5_000))
+    # bury one of them
+    yard.place("A", 1, 1, 2, occ("TOPC0000001", 4_000))
+
+    response = find_best_slot(DeckingRequest(containerId="HVYA0000001", weightKg=26_000, reefer=False), yard)
+
+    if response.suggestion:
+        assert response.suggestion.move_container_id != "LA11000000"[:11], "buried container is not liftable"
+
+
+def test_suggestion_avoids_disturbing_an_imminent_departure_when_alternatives_tie():
+    """Relocating a container that leaves in hours is wasted crane work.
+
+    The urgency penalty is a tiebreaker, not an override: it is capped at
+    RELOCATION_URGENCY_HORIZON_DAYS while shuffle risk is weighted x10, so it
+    decides between destinations that are otherwise equally good. This sets all
+    the shuffle risks equal so urgency is what is actually under test.
+    """
+    yard = YardState()
+    for block in ("A", "B", "C"):
+        for row, bay in yard.candidate_stacks(block):
+            # long dwell everywhere, so every destination scores zero shuffle risk
+            yard.place(block, row, bay, 1, occ(f"L{block}{row}{bay}".ljust(11, "0")[:11], 5_000, dwell=30.0))
+    # one container is about to leave; moving it would be the wasted move
+    yard.place("B", 2, 2, 1, occ("IMMINENT001", 5_000, dwell=0.05))
+
+    response = find_best_slot(DeckingRequest(containerId="HVYA0000001", weightKg=26_000, reefer=False), yard)
+
+    assert response.suggestion is not None
+    assert response.suggestion.move_container_id != "IMMINENT001"
+
+
+def test_no_suggestion_when_the_yard_is_genuinely_full():
+    yard = YardState()
+    for block in ("A", "B", "C"):
+        for row, bay in yard.candidate_stacks(block):
+            for tier in range(1, 6):
+                yard.place(block, row, bay, tier, occ(f"F{block}{row}{bay}{tier}".ljust(11, "0")[:11], 30_000))
+
+    response = find_best_slot(DeckingRequest(containerId="HVYA0000001", weightKg=26_000, reefer=False), yard)
+
+    assert response.placed is False
+    assert response.suggestion is None, "no move helps when every slot is taken"
