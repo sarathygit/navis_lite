@@ -110,7 +110,7 @@ export default function App() {
   return (
     <div className="app-shell">
       <header className="app-title-bar">
-        <h1>NAVIS-LITE // Yard &amp; Gate Control</h1>
+        <h1>TOS-YSM // Yard &amp; Gate Control</h1>
         {efficiencyIndex && (
           <div className="efficiency-index" style={{ color: efficiencyColor(efficiencyIndex.efficiencyIndex) }}>
             Terminal Shuffle Efficiency Index: {efficiencyIndex.efficiencyIndex}%
