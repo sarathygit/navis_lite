@@ -203,3 +203,59 @@ def test_relocation_search_survives_a_restored_yard():
     response = find_best_slot(DeckingRequest(containerId="HVYA0000001", weightKg=26_000, reefer=False), yard)
     assert response.placed is False
     assert response.suggestion is not None
+
+
+# ---------- start-up retry ----------
+
+def test_resync_retries_until_the_gateway_finishes_booting(monkeypatch):
+    """Regression: the engine resynced exactly once at start-up. On a host that
+    sleeps idle services and wakes them independently, the gateway is often
+    still booting at that moment, so the grids stayed empty for the whole life
+    of the process."""
+    import app.services.state_sync as sync
+
+    attempts = {"n": 0}
+
+    def flaky():
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            return {"skipped": True, "reason": "ledger unavailable"}
+        return {"ledger_records": 1, "yard_occupied": 1}
+
+    monkeypatch.setattr(sync, "resync", flaky)
+    slept = []
+    result = sync.resync_with_retry(max_attempts=5, initial_delay_seconds=2, sleep=slept.append)
+
+    assert attempts["n"] == 3, "must keep trying until the ledger answers"
+    assert result["yard_occupied"] == 1
+    assert slept == [2, 4], "delay must double between attempts"
+
+
+def test_resync_does_not_retry_a_genuinely_empty_ledger(monkeypatch):
+    """An empty terminal is a real answer, not a failure, so it must not sit
+    through the backoff before serving requests."""
+    import app.services.state_sync as sync
+
+    calls = {"n": 0}
+
+    def empty():
+        calls["n"] += 1
+        return {"ledger_records": 0, "yard_occupied": 0}
+
+    monkeypatch.setattr(sync, "resync", empty)
+    slept = []
+    sync.resync_with_retry(max_attempts=5, initial_delay_seconds=2, sleep=slept.append)
+
+    assert calls["n"] == 1
+    assert slept == []
+
+
+def test_resync_gives_up_after_the_last_attempt_without_hanging(monkeypatch):
+    import app.services.state_sync as sync
+
+    monkeypatch.setattr(sync, "resync", lambda: {"skipped": True, "reason": "ledger unavailable"})
+    slept = []
+    result = sync.resync_with_retry(max_attempts=3, initial_delay_seconds=1, sleep=slept.append)
+
+    assert result["skipped"] is True
+    assert len(slept) == 2, "no sleep after the final attempt"

@@ -14,12 +14,18 @@ Runs at start-up, and can be re-triggered at any time via POST /api/state/resync
 """
 
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 import httpx
 
-from app.core.config import GATEWAY_TIMEOUT_SECONDS, GATEWAY_URL
+from app.core.config import (
+    GATEWAY_TIMEOUT_SECONDS,
+    GATEWAY_URL,
+    RESYNC_INITIAL_DELAY_SECONDS,
+    RESYNC_MAX_ATTEMPTS,
+)
 from app.services.vessel_state import VesselOccupant, VesselState, vessel_state
 from app.services.yard_state import SlotOccupant, YardState, yard_state
 
@@ -167,3 +173,49 @@ def resync() -> dict[str, Any]:
         yard_report["restored"], vessel_report["restored"], len(records),
     )
     return summary
+
+
+def resync_with_retry(
+    max_attempts: int = RESYNC_MAX_ATTEMPTS,
+    initial_delay_seconds: float = RESYNC_INITIAL_DELAY_SECONDS,
+    sleep=time.sleep,
+) -> dict[str, Any]:
+    """Resyncs, retrying for as long as the ledger is unreachable.
+
+    One attempt is enough when the services start together, as they do under
+    docker compose. It is not enough on a platform that sleeps idle services
+    and wakes them independently: the engine frequently comes up while the
+    gateway is still booting, so the single attempt finds nothing, the grids
+    stay empty, and because nothing ever retries they stay empty until someone
+    calls POST /api/state/resync by hand. The yard then silently disagrees with
+    the ledger for as long as the service runs.
+
+    Only an unreachable ledger is retried. An empty one is a real answer --
+    every container has left -- and returns immediately, so a genuinely empty
+    terminal never pays the backoff.
+    """
+    delay = initial_delay_seconds
+    result: dict[str, Any] = {}
+
+    for attempt in range(1, max_attempts + 1):
+        result = resync()
+
+        if not result.get("skipped"):
+            if attempt > 1:
+                logger.info("State resync succeeded on attempt %s of %s", attempt, max_attempts)
+            return result
+
+        if attempt < max_attempts:
+            logger.warning(
+                "Ledger unavailable (attempt %s of %s); retrying in %.0fs",
+                attempt, max_attempts, delay,
+            )
+            sleep(delay)
+            delay *= 2
+
+    logger.error(
+        "Ledger still unavailable after %s attempts; the grids remain empty and will "
+        "disagree with the ledger. Call POST /api/state/resync once the gateway responds.",
+        max_attempts,
+    )
+    return result

@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
 from app.services.ml_model import dwell_time_model
-from app.services.state_sync import resync
+from app.services.state_sync import resync_with_retry
 from app.services.telemetry import telemetry_simulator
 
 logger = logging.getLogger(__name__)
@@ -17,13 +17,13 @@ def _warm_up_in_background() -> None:
     """Restores grid state, then promotes the model off the synthetic corpus.
 
     Runs off the startup path deliberately: the gateway may still be booting,
-    and a slot request must never wait on a training round.
+    and neither the wait for it nor a training round may hold up a slot request.
 
     Order matters — the yard is rebuilt first so placement decisions are made
     against the real occupancy rather than an empty grid.
     """
     try:
-        resync()
+        resync_with_retry()
     except Exception as exc:
         logger.warning("Start-up state resync failed, grids start empty: %s", exc)
 

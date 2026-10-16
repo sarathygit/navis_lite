@@ -48,6 +48,14 @@ VESSEL_UPPER_DECK_MIN_TIER = 3
 # The gateway owns transaction history, so the engine fetches it over HTTP
 # rather than opening its own database connection.
 GATEWAY_URL = os.getenv("GATEWAY_SERVICE_URL", "http://gateway-service:8080")
+
+# How hard start-up tries to reach the ledger before giving up. The delay
+# doubles each time, so the defaults wait 2+4+8+16+32+64 = 126s in total.
+# That is sized for a platform that sleeps idle services: a cold start can
+# take a minute or more, and one attempt that lands inside that window would
+# otherwise leave the grids empty until someone resynced by hand.
+RESYNC_MAX_ATTEMPTS = int(os.getenv("RESYNC_MAX_ATTEMPTS", "7"))
+RESYNC_INITIAL_DELAY_SECONDS = float(os.getenv("RESYNC_INITIAL_DELAY_SECONDS", "2"))
 GATEWAY_TIMEOUT_SECONDS = 5.0
 
 # Below this many usable historical rows, the model falls back to the synthetic
